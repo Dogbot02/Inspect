@@ -1,141 +1,216 @@
+/* * Lens Inspector
+ * Custom Implementation by [Your Name/Handle]
+ * A focused, lightweight DOM and Style explorer.
+ */
+
 (function() {
-    // 1. Setup - Remove old versions if they exist
-    const existing = document.getElementById('gemini-v2');
-    if (existing) {
-        existing.remove();
+    // 1. Core Setup & Collision Prevention
+    const LENS_ID = 'lens-inspector-panel';
+    const HIGHLIGHT_CLASS = 'lens-target-active';
+    const sidebarWidth = '380px';
+
+    if (document.getElementById(LENS_ID)) {
+        document.getElementById(LENS_ID).remove();
         document.body.style.marginRight = '0';
+        cleanupHighlighter();
         return;
     }
 
-    // 2. Main Panel Layout
+    // -- Create Component: The Sidebar Panel --
     const panel = document.createElement('div');
-    panel.id = 'gemini-v2';
+    panel.id = LENS_ID;
     Object.assign(panel.style, {
-        position: 'fixed', top: '0', right: '0', width: '35%', height: '100%',
-        backgroundColor: '#0d1117', color: '#c9d1d9', zIndex: '2147483647',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", monospace',
-        display: 'flex', flexDirection: 'column', borderLeft: '1px solid #30363d',
-        boxShadow: '-10px 0 30px rgba(0,0,0,0.5)', transition: 'all 0.2s ease'
+        position: 'fixed', top: '0', right: '0', width: sidebarWidth, height: '100%',
+        backgroundColor: '#f6f8fa', color: '#24292f', zIndex: '2147483647',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        display: 'flex', flexDirection: 'column', borderLeft: '1px solid #d0d7de',
+        boxShadow: '-4px 0 12px rgba(0,0,0,0.08)', overflow: 'hidden',
+        transition: 'transform 0.25s ease-out'
     });
 
-    document.body.style.marginRight = '35%';
-    document.body.style.transition = 'margin-right 0.2s ease';
+    // Pushing the website content smoothly
+    document.body.style.transition = 'margin-right 0.25s ease-out';
+    document.body.style.marginRight = sidebarWidth;
 
-    // 3. UI Header
-    panel.innerHTML = `
-        <div style="display:flex; background:#161b22; border-bottom:1px solid #30363d; user-select:none;">
-            <div id="btn-el" style="padding:12px; flex:1; text-align:center; cursor:pointer; border-bottom:2px solid #58a6ff; color:#58a6ff">Elements</div>
-            <div id="btn-pk" style="padding:12px; flex:1; text-align:center; cursor:pointer; color:#8b949e">Picker</div>
-            <div id="btn-cl" style="padding:12px; color:#f85149; font-weight:bold; cursor:pointer;">✕</div>
+    // -- Create Component: Header and Tabs --
+    const header = document.createElement('div');
+    header.style.cssText = `
+        display: flex; background: #fff; border-bottom: 1px solid #d0d7de; 
+        font-size: 13px; font-weight: 500; user-select: none;
+    `;
+
+    const createTab = (id, text, active = false) => `
+        <div id="${id}" style="padding: 14px 18px; cursor: pointer; color: ${active ? '#0969da' : '#57606a'}; 
+        border-bottom: 2px solid ${active ? '#0969da' : 'transparent'};">
+            ${text}
+        </div>`;
+
+    header.innerHTML = `
+        <div style="flex: 1; display: flex;">
+            ${createTab('lens-tab-el', 'DOM Tree', true)}
+            ${createTab('lens-tab-pk', 'Picker')}
         </div>
-        <div id="tree-container" style="flex:1; overflow:auto; padding:15px; font-size:13px; line-height:1.6;"></div>
-        <div id="footer-editor" style="height:250px; background:#0d1117; border-top:1px solid #30363d; display:flex; flexDirection:column;">
-            <div id="el-tag-name" style="font-size:11px; padding:6px 12px; background:#161b22; color:#8b949e; border-bottom:1px solid #30363d">STYLE EDITOR</div>
-            <textarea id="css-box" spellcheck="false" style="flex:1; background:transparent; color:#79c0ff; border:none; padding:12px; resize:none; outline:none; font-family:monospace; font-size:12px;"></textarea>
+        <div id="lens-close" style="padding: 14px; color: #57606a; cursor: pointer; font-weight: bold; font-size: 16px;">
+            ✕
         </div>
     `;
+    panel.appendChild(header);
+
+    // -- Create Component: Content Area (Recursive Tree) --
+    const content = document.createElement('div');
+    Object.assign(content.style, { flex: '1', overflowY: 'auto', padding: '16px', fontSize: '13px', lineBreak: 'anywhere' });
+    panel.appendChild(content);
+
+    // -- Create Component: Persistent Footer (Style Editor) --
+    const footer = document.createElement('div');
+    Object.assign(footer.style, {
+        height: '220px', background: '#fff', borderTop: '1px solid #d0d7de', display: 'flex', flexDirection: 'column'
+    });
+    footer.innerHTML = `
+        <div id="lens-tag-label" style="font-size: 11px; font-weight: 600; padding: 8px 16px; background: #f6f8fa; color: #57606a; border-bottom: 1px solid #d0d7de; text-transform: uppercase; letter-spacing: 0.5px;">
+            Selector: &nbsp; <span style="font-weight: 400; color:#cf222e;">[None Selected]</span>
+        </div>
+        <textarea id="lens-css-editor" spellcheck="false" placeholder="/* Inline styles will appear here. Edit and press Enter. */" style="flex: 1; background: transparent; color: #1f2328; border: none; padding: 12px; resize: none; outline: none; font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, monospace; font-size: 12px;"></textarea>
+    `;
+    panel.appendChild(footer);
 
     document.body.appendChild(panel);
 
-    // --- LOGIC ---
+    // --- Core Logic ---
+    let selectedElement = null;
     let isPicking = false;
-    const tree = panel.querySelector('#tree-container');
-    const cssBox = panel.querySelector('#css-box');
-    const tagLabel = panel.querySelector('#el-tag-name');
+    const cssEditor = panel.querySelector('#lens-css-editor');
 
-    // Element Selection Logic
-    function updateSelection(el) {
-        document.querySelectorAll('.v2-highlighter').forEach(n => n.style.outline = '');
-        el.style.outline = '2px solid #58a6ff';
-        el.classList.add('v2-highlighter');
-        
-        tagLabel.innerText = `STYLES: <${el.tagName.toLowerCase()}>`;
-        cssBox.value = el.getAttribute('style') || '';
-        cssBox.oninput = () => el.setAttribute('style', cssBox.value);
+    // -- Core Logic: Selecting an Element --
+    function selectElement(el) {
+        if (!el || el === document.documentElement || el.id === LENS_ID) return;
+        selectedElement = el;
+
+        // Apply new outline
+        cleanupHighlighter();
+        el.classList.add(HIGHLIGHT_CLASS);
+        el.style.outline = '2px solid #0969da';
+        el.style.outlineOffset = '-1px';
+
+        // Update CSS Box
+        const tagSpan = panel.querySelector('#lens-tag-label span');
+        tagSpan.innerText = `<${el.tagName.toLowerCase()}>`;
+        tagSpan.style.color = '#1f2328';
+        tagSpan.style.fontWeight = '600';
+
+        cssEditor.value = el.getAttribute('style') || '';
+        cssEditor.oninput = () => el.setAttribute('style', cssEditor.value);
     }
 
-    // Build Collapsible Tree
-    function createNode(el, depth = 0) {
-        const wrap = document.createElement('div');
-        wrap.style.marginLeft = `${depth ? 15 : 0}px`;
+    function cleanupHighlighter() {
+        document.querySelectorAll(`.${HIGHLIGHT_CLASS}`).forEach(n => {
+            n.style.outline = '';
+            n.style.outlineOffset = '';
+            n.classList.remove(HIGHLIGHT_CLASS);
+        });
+    }
 
-        const line = document.createElement('div');
-        line.style.whiteSpace = 'nowrap';
-        
+    // -- Core Logic: Lazy Recursive DOM Tree --
+    function createTreeNode(el, depth = 0) {
+        if (el.id === LENS_ID) return document.createDocumentFragment();
+
+        const container = document.createElement('div');
+        container.style.marginLeft = `${depth ? 16 : 0}px`;
+
+        const row = document.createElement('div');
+        row.style.cssText = `display: flex; align-items: center; padding: 3px 0; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px;`;
+
+        // Arrow logic
         const hasChildren = el.children.length > 0;
         const arrow = document.createElement('span');
-        arrow.innerHTML = hasChildren ? '▶ ' : '&nbsp;&nbsp;';
-        arrow.style.color = '#8b949e';
-        arrow.style.cursor = 'pointer';
-        arrow.style.fontSize = '10px';
-        arrow.style.marginRight = '4px';
+        arrow.innerText = hasChildren ? '▸' : ' ';
+        arrow.style.cssText = `color: #8c959f; font-size: 11px; margin-right: 6px; width: 10px; text-align: center; cursor: pointer;`;
 
-        const tag = document.createElement('span');
-        tag.innerHTML = `<span style="color:#7ee787">&lt;${el.tagName.toLowerCase()}</span><span style="color:#8b949e">&gt;</span>`;
-        tag.style.cursor = 'pointer';
+        // Tag Logic
+        const tagSpan = document.createElement('span');
+        tagSpan.innerHTML = `<span style="color:#cf222e">&lt;${el.tagName.toLowerCase()}</span><span style="color:#24292f">&gt;</span>`;
+        tagSpan.style.cursor = 'pointer';
 
-        line.appendChild(arrow);
-        line.appendChild(tag);
-        wrap.appendChild(line);
+        row.appendChild(arrow);
+        row.appendChild(tagSpan);
+        container.appendChild(row);
 
-        const childGrid = document.createElement('div');
-        childGrid.style.display = 'none';
-        wrap.appendChild(childGrid);
+        const childrenBox = document.createElement('div');
+        childrenBox.style.display = 'none';
+        container.appendChild(childrenBox);
 
-        // Arrow Toggle
-        arrow.onclick = (e) => {
+        // Events: Toggling Children
+        const toggleChildren = (e) => {
             e.stopPropagation();
-            const isOpen = childGrid.style.display === 'block';
-            childGrid.style.display = isOpen ? 'none' : 'block';
-            arrow.innerHTML = isOpen ? '▶ ' : '▼ ';
+            const isOpen = childrenBox.style.display === 'block';
+            childrenBox.style.display = isOpen ? 'none' : 'block';
+            arrow.innerText = isOpen ? '▸' : '▾';
             
-            if (!isOpen && childGrid.innerHTML === '') {
-                Array.from(el.children).forEach(c => childGrid.appendChild(createNode(c, depth + 1)));
+            if (!isOpen && childrenBox.innerHTML === '') {
+                Array.from(el.children).forEach(child => childrenBox.appendChild(createTreeNode(child, depth + 1)));
             }
         };
 
-        tag.onclick = (e) => {
-            e.stopPropagation();
-            updateSelection(el);
-        };
+        arrow.onclick = toggleChildren;
+        tagSpan.onclick = (e) => { e.stopPropagation(); selectElement(el); };
 
-        return wrap;
+        return container;
     }
 
-    const refreshTree = () => {
-        tree.innerHTML = '';
-        tree.appendChild(createNode(document.documentElement));
+    const renderFullTree = () => {
+        content.innerHTML = '';
+        content.style.lineHeight = '1.4';
+        content.appendChild(createTreeNode(document.documentElement));
     };
 
-    // --- Tab Events ---
-    panel.querySelector('#btn-el').onclick = () => {
+    // -- Core Logic: Tab & UI Events --
+    const tabEl = panel.querySelector('#lens-tab-el');
+    const tabPk = panel.querySelector('#lens-tab-pk');
+
+    const activateTab = (activeTab, inactiveTab) => {
+        activeTab.style.color = '#0969da'; activeTab.style.borderBottomColor = '#0969da';
+        inactiveTab.style.color = '#57606a'; inactiveTab.style.borderBottomColor = 'transparent';
+    };
+
+    tabEl.onclick = () => {
         isPicking = false;
-        panel.querySelector('#btn-el').style.color = '#58a6ff';
-        panel.querySelector('#btn-pk').style.color = '#8b949e';
-        refreshTree();
+        activateTab(tabEl, tabPk);
+        renderFullTree();
     };
 
-    panel.querySelector('#btn-pk').onclick = () => {
+    tabPk.onclick = () => {
         isPicking = true;
-        panel.querySelector('#btn-pk').style.color = '#58a6ff';
-        panel.querySelector('#btn-el').style.color = '#8b949e';
-        tree.innerHTML = '<div style="color:#d29922; text-align:center; padding:40px;">Click any element on the page...</div>';
+        activateTab(tabPk, tabEl);
+        cleanupHighlighter();
+        content.innerHTML = `<div style="color:#d29922; text-align:center; padding: 30px 10px; background: #fff8eb; border-radius: 6px; border: 1px solid #d2992222;">
+            <div style="font-weight: 600; font-size: 15px;">Targeting System Active</div>
+            <div style="font-size: 12px; color: #57606a; margin-top: 6px;">Move mouse and click an item on the page.</div>
+        </div>`;
     };
 
+    // Global Click Handler for Picker
     document.addEventListener('click', (e) => {
         if (isPicking) {
+            if (e.target.id === LENS_ID || panel.contains(e.target)) return;
             e.preventDefault();
             e.stopPropagation();
-            updateSelection(e.target);
-            tree.innerHTML = `<div style="color:#8b949e; margin-bottom:10px;">Properties of picked element:</div>`;
-            tree.appendChild(createNode(e.target));
+            selectElement(e.target);
+            content.innerHTML = `
+                <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Focused Element properties:</div>
+                <div style="padding:10px; background:#fff; border: 1px solid #d0d7de; border-radius:4px;">
+                    ${createTreeNode(e.target).outerHTML}
+                </div>
+                <p style="color:#0969da; margin-top:12px; font-size:11px;">Click 'DOM Tree' to view full document structure.</p>
+            `;
         }
     }, true);
 
-    panel.querySelector('#btn-cl').onclick = () => {
+    panel.querySelector('#lens-close').onclick = () => {
         panel.remove();
         document.body.style.marginRight = '0';
+        cleanupHighlighter();
     };
 
-    refreshTree();
+    // Initial Render
+    renderFullTree();
 })();
