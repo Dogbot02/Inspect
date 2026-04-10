@@ -1,154 +1,141 @@
 (function() {
-    // 1. Setup & Prevent Multi-loading
-    if (document.getElementById('gemini-inspector')) {
-        document.getElementById('gemini-inspector').remove();
+    // 1. Setup - Remove old versions if they exist
+    const existing = document.getElementById('gemini-v2');
+    if (existing) {
+        existing.remove();
         document.body.style.marginRight = '0';
         return;
     }
 
+    // 2. Main Panel Layout
     const panel = document.createElement('div');
-    panel.id = 'gemini-inspector';
+    panel.id = 'gemini-v2';
     Object.assign(panel.style, {
-        position: 'fixed', top: '0', right: '0', width: '40%', height: '100%',
-        backgroundColor: '#1e1e1e', color: '#d4d4d4', zIndex: '2147483647',
-        fontFamily: 'monospace', display: 'flex', flexDirection: 'column',
-        borderLeft: '2px solid #444', boxShadow: '-5px 0 15px rgba(0,0,0,0.5)', overflow: 'hidden'
+        position: 'fixed', top: '0', right: '0', width: '35%', height: '100%',
+        backgroundColor: '#0d1117', color: '#c9d1d9', zIndex: '2147483647',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", monospace',
+        display: 'flex', flexDirection: 'column', borderLeft: '1px solid #30363d',
+        boxShadow: '-10px 0 30px rgba(0,0,0,0.5)', transition: 'all 0.2s ease'
     });
 
-    document.body.style.transition = 'margin-right 0.3s';
-    document.body.style.marginRight = '40%';
+    document.body.style.marginRight = '35%';
+    document.body.style.transition = 'margin-right 0.2s ease';
 
-    // 2. Tabs
-    const tabs = document.createElement('div');
-    tabs.innerHTML = `
-        <div style="display:flex; background:#333; cursor:pointer; font-size:12px; border-bottom:1px solid #444">
-            <div id="tab-el" style="padding:10px; flex:1; text-align:center; border-bottom:2px solid #007acc">Elements</div>
-            <div id="tab-pick" style="padding:10px; flex:1; text-align:center;">Picker</div>
-            <div id="tab-con" style="padding:10px; flex:1; text-align:center;">Console</div>
-            <div id="close-insp" style="padding:10px; color:#ff5f56;">✕</div>
+    // 3. UI Header
+    panel.innerHTML = `
+        <div style="display:flex; background:#161b22; border-bottom:1px solid #30363d; user-select:none;">
+            <div id="btn-el" style="padding:12px; flex:1; text-align:center; cursor:pointer; border-bottom:2px solid #58a6ff; color:#58a6ff">Elements</div>
+            <div id="btn-pk" style="padding:12px; flex:1; text-align:center; cursor:pointer; color:#8b949e">Picker</div>
+            <div id="btn-cl" style="padding:12px; color:#f85149; font-weight:bold; cursor:pointer;">✕</div>
+        </div>
+        <div id="tree-container" style="flex:1; overflow:auto; padding:15px; font-size:13px; line-height:1.6;"></div>
+        <div id="footer-editor" style="height:250px; background:#0d1117; border-top:1px solid #30363d; display:flex; flexDirection:column;">
+            <div id="el-tag-name" style="font-size:11px; padding:6px 12px; background:#161b22; color:#8b949e; border-bottom:1px solid #30363d">STYLE EDITOR</div>
+            <textarea id="css-box" spellcheck="false" style="flex:1; background:transparent; color:#79c0ff; border:none; padding:12px; resize:none; outline:none; font-family:monospace; font-size:12px;"></textarea>
         </div>
     `;
-    panel.appendChild(tabs);
 
-    // 3. Elements Tree Area
-    const content = document.createElement('div');
-    Object.assign(content.style, { flex: '1', overflowY: 'auto', padding: '10px', fontSize: '13px' });
-    panel.appendChild(content);
-
-    // 4. Persistent Editor (Always visible at bottom)
-    const bottomEditor = document.createElement('div');
-    Object.assign(bottomEditor.style, {
-        height: '200px', borderTop: '2px solid #444', background: '#252526', display: 'flex', flexDirection: 'column'
-    });
-    bottomEditor.innerHTML = `
-        <div id="editor-label" style="font-size:10px; padding:5px; background:#333; color:#aaa; border-bottom:1px solid #444">STYLES (Select an element)</div>
-        <textarea id="css-editor" spellcheck="false" style="flex:1; background:transparent; color:#9cdcfe; border:none; padding:10px; resize:none; outline:none; font-family:monospace;"></textarea>
-    `;
-    panel.appendChild(bottomEditor);
     document.body.appendChild(panel);
 
     // --- LOGIC ---
     let isPicking = false;
+    const tree = panel.querySelector('#tree-container');
+    const cssBox = panel.querySelector('#css-box');
+    const tagLabel = panel.querySelector('#el-tag-name');
 
-    const selectElement = (el) => {
-        document.querySelectorAll('.insp-target-outline').forEach(n => n.style.outline = '');
-        el.style.outline = '2px dashed #007acc';
-        el.classList.add('insp-target-outline');
+    // Element Selection Logic
+    function updateSelection(el) {
+        document.querySelectorAll('.v2-highlighter').forEach(n => n.style.outline = '');
+        el.style.outline = '2px solid #58a6ff';
+        el.classList.add('v2-highlighter');
         
-        document.getElementById('editor-label').innerText = `STYLES: <${el.tagName.toLowerCase()}>`;
-        const cssArea = document.getElementById('css-editor');
-        cssArea.value = el.getAttribute('style') || '';
-        cssArea.oninput = () => { el.setAttribute('style', cssArea.value); };
-    };
+        tagLabel.innerText = `STYLES: <${el.tagName.toLowerCase()}>`;
+        cssBox.value = el.getAttribute('style') || '';
+        cssBox.oninput = () => el.setAttribute('style', cssBox.value);
+    }
 
-    // Recursive Tree Builder with Arrows
-    const createTreeItem = (el, margin) => {
-        const itemContainer = document.createElement('div');
-        itemContainer.style.marginLeft = margin + 'px';
+    // Build Collapsible Tree
+    function createNode(el, depth = 0) {
+        const wrap = document.createElement('div');
+        wrap.style.marginLeft = `${depth ? 15 : 0}px`;
 
         const line = document.createElement('div');
-        line.style.display = 'flex';
-        line.style.alignItems = 'center';
-        line.style.padding = '2px 0';
-
+        line.style.whiteSpace = 'nowrap';
+        
         const hasChildren = el.children.length > 0;
         const arrow = document.createElement('span');
         arrow.innerHTML = hasChildren ? '▶ ' : '&nbsp;&nbsp;';
-        arrow.style.color = '#808080';
+        arrow.style.color = '#8b949e';
         arrow.style.cursor = 'pointer';
         arrow.style.fontSize = '10px';
         arrow.style.marginRight = '4px';
 
         const tag = document.createElement('span');
-        tag.innerHTML = `<span style="color:#569cd6">&lt;${el.tagName.toLowerCase()}</span><span style="color:#808080">&gt;</span>`;
+        tag.innerHTML = `<span style="color:#7ee787">&lt;${el.tagName.toLowerCase()}</span><span style="color:#8b949e">&gt;</span>`;
         tag.style.cursor = 'pointer';
 
         line.appendChild(arrow);
         line.appendChild(tag);
-        itemContainer.appendChild(line);
+        wrap.appendChild(line);
 
-        const childrenBox = document.createElement('div');
-        childrenBox.style.display = 'none';
-        itemContainer.appendChild(childrenBox);
+        const childGrid = document.createElement('div');
+        childGrid.style.display = 'none';
+        wrap.appendChild(childGrid);
 
-        // Click Arrow to Expand
+        // Arrow Toggle
         arrow.onclick = (e) => {
             e.stopPropagation();
-            if (childrenBox.style.display === 'none') {
-                childrenBox.style.display = 'block';
-                arrow.innerHTML = '▼ ';
-                if (childrenBox.innerHTML === '') {
-                    Array.from(el.children).forEach(child => {
-                        childrenBox.appendChild(createTreeItem(child, 12));
-                    });
-                }
-            } else {
-                childrenBox.style.display = 'none';
-                arrow.innerHTML = '▶ ';
+            const isOpen = childGrid.style.display === 'block';
+            childGrid.style.display = isOpen ? 'none' : 'block';
+            arrow.innerHTML = isOpen ? '▶ ' : '▼ ';
+            
+            if (!isOpen && childGrid.innerHTML === '') {
+                Array.from(el.children).forEach(c => childGrid.appendChild(createNode(c, depth + 1)));
             }
         };
 
-        // Click Tag to Select
         tag.onclick = (e) => {
             e.stopPropagation();
-            selectElement(el);
+            updateSelection(el);
         };
 
-        return itemContainer;
+        return wrap;
+    }
+
+    const refreshTree = () => {
+        tree.innerHTML = '';
+        tree.appendChild(createNode(document.documentElement));
     };
 
-    const renderElements = () => {
-        content.innerHTML = '';
-        content.appendChild(createTreeItem(document.documentElement, 0));
-    };
-
-    // Tab Switching
-    document.getElementById('tab-el').onclick = () => {
+    // --- Tab Events ---
+    panel.querySelector('#btn-el').onclick = () => {
         isPicking = false;
-        renderElements();
+        panel.querySelector('#btn-el').style.color = '#58a6ff';
+        panel.querySelector('#btn-pk').style.color = '#8b949e';
+        refreshTree();
     };
 
-    document.getElementById('tab-pick').onclick = () => {
+    panel.querySelector('#btn-pk').onclick = () => {
         isPicking = true;
-        content.innerHTML = '<div style="color:yellow; text-align:center; padding:20px;">Picker Active... Click an element on the page.</div>';
+        panel.querySelector('#btn-pk').style.color = '#58a6ff';
+        panel.querySelector('#btn-el').style.color = '#8b949e';
+        tree.innerHTML = '<div style="color:#d29922; text-align:center; padding:40px;">Click any element on the page...</div>';
     };
 
-    // Global Click for Picker
     document.addEventListener('click', (e) => {
         if (isPicking) {
             e.preventDefault();
             e.stopPropagation();
-            selectElement(e.target);
-            // Render the specific HTML for what we just picked
-            content.innerHTML = `<div style="color:#aaa; margin-bottom:5px;">Inspecting:</div>`;
-            content.appendChild(createTreeItem(e.target, 0));
+            updateSelection(e.target);
+            tree.innerHTML = `<div style="color:#8b949e; margin-bottom:10px;">Properties of picked element:</div>`;
+            tree.appendChild(createNode(e.target));
         }
     }, true);
 
-    document.getElementById('close-insp').onclick = () => {
+    panel.querySelector('#btn-cl').onclick = () => {
         panel.remove();
         document.body.style.marginRight = '0';
     };
 
-    renderElements();
+    refreshTree();
 })();
